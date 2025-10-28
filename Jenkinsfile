@@ -38,77 +38,89 @@ pipeline {
         stage('Run Selenium Tests') {
             steps {
                 echo "Preparing and running Selenium tests on server ${env.HOST_TESTING}..."
-                // ---> CORRECTED SSH BLOCK WITH \$ ESCAPES <---
-                sh """
-                    ssh -i ${env.SSH_KEY_PATH} -o StrictHostKeyChecking=no ${env.SSH_USER}@${env.HOST_TESTING} "
-                        set -ex
-                        echo 'Installing prerequisites (unzip, xvfb)...'
+                // ---> SIMPLIFIED AND CORRECTED SSH BLOCK <---
+                sh '''
+                    # Use single quotes for the main sh block to minimize Groovy interpolation issues
+                    ssh -i ''' + env.SSH_KEY_PATH + ''' -o StrictHostKeyChecking=no ''' + env.SSH_USER + '''@''' + env.HOST_TESTING + ''' '
+                        # Use double quotes inside SSH for variable expansion by the remote shell
+                        set -ex # Exit on error, print commands
+
+                        echo "--- Installing prerequisites (unzip, xvfb, wget)..."
                         sudo yum install -y unzip xorg-x11-server-Xvfb wget
 
-                        echo 'Checking/Installing Node.js...'
-                        if ! command -v nvm &> /dev/null; then
-                            echo 'Installing NVM...'
-                            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+                        echo "--- Setting up Node.js using NVM..."
+                        # Source NVM script directly if NVM dir exists, otherwise install NVM first
+                        export NVM_DIR="$HOME/.nvm"
+                        if [ -s "$NVM_DIR/nvm.sh" ]; then
+                           \\. "$NVM_DIR/nvm.sh" # Load nvm
+                        else
+                           echo "Installing NVM..."
+                           curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+                           \\. "$NVM_DIR/nvm.sh" # Load nvm after install
                         fi
-                        # Escape \$HOME here for safety, though it might work without
-                        export NVM_DIR="\\\$HOME/.nvm" 
-                        # Keep the \\. for escaping the dot command
-                        [ -s "\\\$NVM_DIR/nvm.sh" ] && \\. "\\\$NVM_DIR/nvm.sh" 
                         nvm install 18
                         nvm use 18
+                        node -v # Verify node
+                        npm -v  # Verify npm
 
-                        echo 'Checking/Installing Chrome and ChromeDriver...'
+                        echo "--- Setting up Chrome and ChromeDriver..."
                         if ! command -v google-chrome &> /dev/null; then
-                           echo 'Installing Google Chrome...'
+                           echo "Installing Google Chrome..."
                            wget https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm -O /tmp/google-chrome.rpm
                            sudo yum install -y /tmp/google-chrome.rpm
                            sudo rm /tmp/google-chrome.rpm
-
-                           echo 'Installing ChromeDriver...'
-                           # Escape shell variables \$CHROME_VERSION_FULL and \$CHROME_VERSION
-                           CHROME_VERSION_FULL=\\\$(google-chrome --version) 
-                           CHROME_VERSION=\\\$(echo \\\$CHROME_VERSION_FULL | cut -d ' ' -f 3 | cut -d '.' -f 1-3) 
-                           
-                           # Escape \$CHROME_VERSION
-                           if [ -z "\\\$CHROME_VERSION" ]; then 
-                               echo 'ERROR: Could not determine Chrome version.'
-                               exit 1
-                           fi
-                           # Escape \$CHROME_VERSION
-                           echo "Detected Chrome version: \\\$CHROME_VERSION" 
-
-                           # Escape \$CHROME_DRIVER_VERSION and the \$CHROME_VERSION inside the URL
-                           CHROME_DRIVER_VERSION=\\\$(curl -sS https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_\\\$CHROME_VERSION) 
-
-                           # Escape \$CHROME_DRIVER_VERSION and \$CHROME_VERSION
-                           if [ -z "\\\$CHROME_DRIVER_VERSION" ]; then 
-                               echo "ERROR: Could not find ChromeDriver version for Chrome \\\$CHROME_VERSION." 
-                               exit 1
-                           fi
-                            # Escape \$CHROME_DRIVER_VERSION
-                           echo "Attempting to download ChromeDriver version: \\\$CHROME_DRIVER_VERSION" 
-
-                            # Escape \$CHROME_DRIVER_VERSION inside the URL
-                           wget -O /tmp/chromedriver_linux64.zip https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/\\\$CHROME_DRIVER_VERSION/linux64/chromedriver-linux64.zip 
-                           
-                           unzip /tmp/chromedriver_linux64.zip -d /tmp
-                           sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/
-                           sudo chmod +x /usr/local/bin/chromedriver
-                           rm /tmp/chromedriver_linux64.zip
-                           rm -rf /tmp/chromedriver-linux64
                         else
-                            echo 'Chrome and ChromeDriver (presumably) already installed.'
+                           echo "Google Chrome already installed."
                         fi
 
-                        echo 'Installing test dependencies (npm install)...'
-                        # Use Groovy variable directly here, no escape needed
-                        cd ${env.REMOTE_TEST_DIR} 
+                        if ! command -v chromedriver &> /dev/null; then
+                            echo "Installing ChromeDriver..."
+                            # Get installed Chrome version (only major.minor.build)
+                            CHROME_VERSION=$(google-chrome --version | cut -d " " -f 3 | cut -d "." -f 1-3)
+                            if [ -z "$CHROME_VERSION" ]; then
+                                echo "ERROR: Could not determine Chrome version." >&2
+                                exit 1
+                            fi
+                            echo "Detected Chrome version (major.minor.build): $CHROME_VERSION"
+
+                            # Find corresponding ChromeDriver version
+                            DRIVER_VERSION=$(curl -sS https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_$CHROME_VERSION)
+                            if [ -z "$DRIVER_VERSION" ]; then
+                                echo "ERROR: Could not find ChromeDriver version for Chrome $CHROME_VERSION." >&2
+                                # Attempt fallback for very recent Chrome versions
+                                CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d '.' -f 1)
+                                echo "Attempting fallback using major version: $CHROME_MAJOR_VERSION"
+                                DRIVER_VERSION=$(curl -sS https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_$CHROME_MAJOR_VERSION)
+                                if [ -z "$DRIVER_VERSION" ]; then
+                                     echo "ERROR: Fallback failed. Could not find ChromeDriver version." >&2
+                                     exit 1
+                                fi
+                            fi
+                            echo "Using ChromeDriver version: $DRIVER_VERSION"
+
+                            # Download and install ChromeDriver
+                            wget -O /tmp/chromedriver_linux64.zip https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/$DRIVER_VERSION/linux64/chromedriver-linux64.zip
+                            unzip /tmp/chromedriver_linux64.zip -d /tmp
+                            sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/
+                            sudo chmod +x /usr/local/bin/chromedriver
+                            rm /tmp/chromedriver_linux64.zip
+                            rm -rf /tmp/chromedriver-linux64
+                        else
+                            echo "ChromeDriver already installed."
+                        fi
+                        chromedriver --version # Verify chromedriver
+
+                        echo "--- Installing test dependencies (npm install)..."
+                        cd ''' + env.REMOTE_TEST_DIR + '''
+                        # Remove node_modules and package-lock for clean install, prevents potential issues
+                        rm -rf node_modules package-lock.json
                         npm install
 
-                        echo 'Executing test: xvfb-run node test_tictactoe.js'
+                        echo "--- Executing test: xvfb-run node test_tictactoe.js..."
+                        # Run test within xvfb virtual display
                         xvfb-run --auto-servernum node test_tictactoe.js
-                    "
-                """
+                    '
+                '''
                 echo "Tests completed successfully!"
             }
         }
