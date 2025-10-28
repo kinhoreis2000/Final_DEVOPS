@@ -38,7 +38,7 @@ pipeline {
         stage('Run Selenium Tests') {
             steps {
                 echo "Preparing and running Selenium tests on server ${env.HOST_TESTING}..."
-                // ---> SWITCH BACK TO """ AND RE-ESCAPE SHELL VARS <---
+                // ---> CORRECTED ESCAPING FOR SHELL VARS AND COMMAND SUBSTITUTION <---
                 sh """
                     ssh -i ${env.SSH_KEY_PATH} -o StrictHostKeyChecking=no ${env.SSH_USER}@${env.HOST_TESTING} "
                         set -ex 
@@ -48,6 +48,7 @@ pipeline {
 
                         echo "--- Setting up Node.js using NVM..."
                         export NVM_DIR="\\\$HOME/.nvm" 
+                        # Source NVM script, ensuring '.' is escaped for Groovy
                         if [ -s "\\\$NVM_DIR/nvm.sh" ]; then
                            \\. "\\\$NVM_DIR/nvm.sh" 
                         else
@@ -72,25 +73,39 @@ pipeline {
 
                         if ! command -v chromedriver &> /dev/null; then
                             echo "Installing ChromeDriver..."
-                            CHROME_VERSION=\\\$(google-chrome --version | cut -d ' ' -f 3 | cut -d '.' -f 1-3) 
+                            # Escape command substitution \$() and internal variable \$CHROME_VERSION_FULL
+                            CHROME_VERSION_FULL=\\\$(google-chrome --version) 
+                            # Escape command substitution \$() and internal variables \$CHROME_VERSION_FULL, \$CHROME_VERSION
+                            CHROME_VERSION=\\\$(echo \\\$CHROME_VERSION_FULL | cut -d ' ' -f 3 | cut -d '.' -f 1-3) 
+                            
                             if [ -z "\\\$CHROME_VERSION" ]; then 
                                 echo "ERROR: Could not determine Chrome version." >&2
                                 exit 1
                             fi
+                            # Escape internal variable \$CHROME_VERSION
                             echo "Detected Chrome version (major.minor.build): \\\$CHROME_VERSION" 
+
+                            # Escape command substitution \$() and internal variable \$CHROME_VERSION
                             DRIVER_VERSION=\\\$(curl -sS https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_\\\$CHROME_VERSION) 
+                            
                             if [ -z "\\\$DRIVER_VERSION" ]; then 
-                                echo "ERROR: Could not find ChromeDriver version for Chrome \\\$CHROME_VERSION." >&2
+                                # Escape internal variable \$CHROME_VERSION
+                                echo "ERROR: Could not find ChromeDriver version for Chrome \\\$CHROME_VERSION." >&2 
+                                # Escape command substitution \$() and internal variables \$CHROME_VERSION, \$CHROME_MAJOR_VERSION
                                 CHROME_MAJOR_VERSION=\\\$(echo \\\$CHROME_VERSION | cut -d '.' -f 1) 
                                 echo "Attempting fallback using major version: \\\$CHROME_MAJOR_VERSION" 
+                                # Escape command substitution \$() and internal variable \$CHROME_MAJOR_VERSION
                                 DRIVER_VERSION=\\\$(curl -sS https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_\\\$CHROME_MAJOR_VERSION) 
                                 if [ -z "\\\$DRIVER_VERSION" ]; then 
                                      echo "ERROR: Fallback failed. Could not find ChromeDriver version." >&2
                                      exit 1
                                 fi
                             fi
+                            # Escape internal variable \$DRIVER_VERSION
                             echo "Using ChromeDriver version: \\\$DRIVER_VERSION" 
+                            # Escape internal variable \$DRIVER_VERSION in URL
                             wget -O /tmp/chromedriver_linux64.zip https://edgedl.me.gvt1.com/edgedl/chrome/chrome-for-testing/\\\$DRIVER_VERSION/linux64/chromedriver-linux64.zip 
+                            
                             unzip /tmp/chromedriver_linux64.zip -d /tmp
                             sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/
                             sudo chmod +x /usr/local/bin/chromedriver
@@ -102,8 +117,7 @@ pipeline {
                         chromedriver --version 
 
                         echo "--- Installing test dependencies (npm install)..."
-                        # Groovy will correctly substitute this env var now
-                        cd ${env.REMOTE_TEST_DIR} 
+                        cd ${env.REMOTE_TEST_DIR} # Groovy substitutes this one
                         rm -rf node_modules package-lock.json
                         npm install
 
