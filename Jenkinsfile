@@ -1,25 +1,13 @@
-// Esta função é um "helper". A definimos aqui para não repetir o mesmo
-// script de deploy três vezes. Isso torna o pipeline muito mais limpo.
+// Função helper para deploy (sem mudanças)
 def deployParaServidor(String hostIP) {
     sh """
         echo "Iniciando deploy para ${hostIP}..."
-        
-        # 1. Conecta via SSH, -i usa nossa chave, -o ignora a verificação de host
         ssh -i ${env.CAMINHO_CHAVE_SSH} -o StrictHostKeyChecking=no ${env.USUARIO_SSH}@${hostIP} "
-            
-            # 2. Instala o git (se já tiver, não faz nada)
             sudo yum install -y git
-            
-            # 3. Limpa o diretório antigo e recria
             sudo rm -rf /var/www/html
             sudo mkdir -p /var/www/html
-            
-            # 4. Dá permissão ao nosso usuário para que o 'git clone' não precise de sudo
             sudo chown ${env.USUARIO_SSH}:${env.USUARIO_SSH} /var/www/html
-            
-            # 5. Clona o código mais recente do repositório para a pasta
             git clone ${env.REPO_URL} /var/www/html
-            
             echo 'Deploy em ${hostIP} concluído com sucesso!'
         "
     """
@@ -28,19 +16,15 @@ def deployParaServidor(String hostIP) {
 pipeline {
     agent any
 
-    // =========================================================================
-    // ⭐️ SUAS VARIÁVEIS JÁ ESTÃO CONFIGURADAS ⭐️
-    // =========================================================================
     environment {
-        // --- IPs dos seus servidores EC2 ---
         HOST_TESTING   = '18.215.146.69'
         HOST_PROD_1    = '34.205.20.35'
         HOST_PROD_2    = '3.84.53.23'
-        
-        // --- Configuração do Repositório e SSH ---
-        REPO_URL         = 'https://github.com/kinhoreis2000/Final_DEVOPS' // Ou o seu repo
+        REPO_URL         = 'https://github.com/kinhoreis2000/Final_DEVOPS'
         USUARIO_SSH      = 'ec2-user'
-        CAMINHO_CHAVE_SSH = '/var/lib/jenkins/.ssh/DevOps.pem'
+        CAMINHO_CHAVE_SSH = '/home/ec2-user/.ssh/DevOps.pem'
+        // ---> NOVO: Caminho para os testes DENTRO do servidor de teste <---
+        TEST_DIR_REMOTO = '/var/www/html/scripts/selenium-tests' 
     }
 
     stages {
@@ -48,59 +32,98 @@ pipeline {
         stage('Deploy em Ambiente de Teste') {
             steps {
                 echo "Iniciando deploy para o servidor de Teste: ${env.HOST_TESTING}"
-                // Chama nossa função helper para fazer o deploy
                 deployParaServidor(env.HOST_TESTING)
             }
         }
         
-        // ====> REMOVEMOS O ESTÁGIO DE TESTE DAQUI <====
-        
-        stage('Aprovação para Produção') { // ====> ADICIONAMOS ESTE ESTÁGIO <====
+        stage('Rodar Testes (Selenium)') { // ---> ESTÁGIO DE VOLTA! <---
             steps {
-                echo "Deploy em Teste concluído."
-                // --> IMPORTANTE: Verifique se o caminho /public/ está correto para o seu projeto <--
-                echo "Acesse http://${env.HOST_TESTING}/public/index.html para verificar o Jogo da Velha." 
+                echo "Preparando e rodando testes de Selenium no servidor ${env.HOST_TESTING}..."
                 
-                // Pausa o pipeline e espera por uma confirmação humana.
+                sh """
+                    # Conecta ao servidor de TESTE para rodar os comandos
+                    ssh -i ${env.CAMINHO_CHAVE_SSH} -o StrictHostKeyChecking=no ${env.USUARIO_SSH}@${env.HOST_TESTING} "
+                        
+                        # 1. Instala NVM e Node.js (se não tiver)
+                        echo 'Verificando/Instalando Node.js...'
+                        if ! command -v nvm &> /dev/null; then
+                            curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+                            export NVM_DIR="\$HOME/.nvm"
+                            [ -s "\$NVM_DIR/nvm.sh" ] && \\. "\$NVM_DIR/nvm.sh"
+                        else
+                            export NVM_DIR="\$HOME/.nvm"
+                            [ -s "\$NVM_DIR/nvm.sh" ] && \\. "\$NVM_DIR/nvm.sh"
+                        fi
+                        nvm install 18
+                        
+                        # ---> IMPORTANTE: Instala o Chrome e o ChromeDriver <---
+                        # (Necessário para o Selenium rodar)
+                        echo 'Verificando/Instalando Chrome e ChromeDriver...'
+                        if ! command -v google-chrome &> /dev/null; then
+                           # Comandos para instalar Chrome no Amazon Linux 2 (pode variar em outros Linux)
+                           curl https://dl.google.com/linux/direct/google-chrome-stable_current_x86_64.rpm -o google-chrome.rpm
+                           sudo yum install -y ./google-chrome.rpm
+                           rm google-chrome.rpm
+                           # Instala o ChromeDriver (versão correspondente ao Chrome)
+                           # Verifique a versão do Chrome com 'google-chrome --version' e ajuste se necessário
+                           CHROME_DRIVER_VERSION=\$(curl -sS chromedriver.storage.googleapis.com/LATEST_RELEASE_\$(google-chrome --version | cut -d ' ' -f 3 | cut -d '.' -f 1-3))
+                           curl -sS -o chromedriver_linux64.zip https://chromedriver.storage.googleapis.com/\$CHROME_DRIVER_VERSION/chromedriver_linux64.zip
+                           unzip chromedriver_linux64.zip
+                           sudo mv chromedriver /usr/local/bin/ # Coloca no PATH
+                           rm chromedriver_linux64.zip
+                        fi
+
+                        # 3. Entra na pasta dos testes e instala dependências do Selenium
+                        echo 'Instalando dependências do teste...'
+                        cd ${env.TEST_DIR_REMOTO}
+                        npm install
+                        
+                        # 4. RODA O TESTE!
+                        echo 'Executando script de teste: node test_tictactoe.js'
+                        # Roda o teste com Xvfb para não precisar de tela gráfica
+                        xvfb-run --auto-servernum node test_tictactoe.js 
+                    "
+                """
+                
+                echo "Testes concluídos com sucesso!" 
+                // Se o script node falhar (exit 1), o Jenkins já marca o estágio como falha.
+            }
+        }
+        
+        stage('Aprovação para Produção') { 
+            // Só executa se o estágio anterior ('Rodar Testes') passou
+            steps {
+                echo "Testes no ambiente de 'Testing' passaram."
+                echo "Acesse http://${env.HOST_TESTING}/public/index.html para verificar manualmente."
+                
                 timeout(time: 1, unit: 'HOURS') {
-                    input message: 'O Jogo da Velha está funcionando em Teste? Aprovar deploy para Produção?'
+                    input message: 'Testes passaram e verificação manual OK? Aprovar deploy para Produção?'
                 }
             }
         }
         
         stage('Deploy em Ambiente de Produção') {
-            // Este 'parallel' executa os deploys nos dois servidores
-            // ao mesmo tempo, economizando tempo.
+            // Só executa se a aprovação foi dada
             parallel {
-                
                 stage('Deploy para Production 1') {
                     steps {
                         echo "Iniciando deploy para Produção 1: ${env.HOST_PROD_1}"
                         deployParaServidor(env.HOST_PROD_1)
                     }
                 }
-                
                 stage('Deploy para Production 2') {
                     steps {
                         echo "Iniciando deploy para Produção 2: ${env.HOST_PROD_2}"
                         deployParaServidor(env.HOST_PROD_2)
                     }
                 }
-                
             }
         }
-
     } // Fim dos stages
 
-    post {
-        always {
-            echo 'Pipeline concluído.'
-        }
-        success {
-            echo 'Deploy finalizado com sucesso!'
-        }
-        failure {
-            echo 'O PIPELINE FALHOU!'
-        }
+    post { // Sem mudanças
+        always { echo 'Pipeline concluído.' }
+        success { echo 'Deploy finalizado com sucesso!' }
+        failure { echo 'O PIPELINE FALHOU!' }
     }
 }
