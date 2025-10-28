@@ -29,7 +29,7 @@ pipeline {
     agent any
 
     // =========================================================================
-    // ⭐️ CONFIGURE SUAS VARIÁVEIS AQUI ⭐️
+    // ⭐️ SUAS VARIÁVEIS JÁ ESTÃO CONFIGURADAS ⭐️
     // =========================================================================
     environment {
         // --- IPs dos seus servidores EC2 ---
@@ -40,9 +40,6 @@ pipeline {
         // --- Configuração do Repositório e SSH ---
         REPO_URL         = 'https://github.com/kinhoreis2000/Final_DEVOPS' // Ou o seu repo
         USUARIO_SSH      = 'ec2-user'
-        
-        // Caminho ABSOLUTO no *servidor Jenkins* onde a chave .pem está.
-        // (Veja as instruções abaixo do código sobre como configurar isso)
         CAMINHO_CHAVE_SSH = '/var/lib/jenkins/.ssh/DevOps.pem'
     }
 
@@ -56,38 +53,20 @@ pipeline {
             }
         }
         
-        stage('Rodar Testes (Selenium)') {
+        // ====> REMOVEMOS O ESTÁGIO DE TESTE DAQUI <====
+        
+        stage('Aprovação para Produção') { // ====> ADICIONAMOS ESTE ESTÁGIO <====
             steps {
-                echo "Rodando testes de Selenium contra o servidor ${env.HOST_TESTING}..."
+                echo "Deploy em Teste concluído."
+                // --> IMPORTANTE: Verifique se o caminho /public/ está correto para o seu projeto <--
+                echo "Acesse http://${env.HOST_TESTING}/public/index.html para verificar o Jogo da Velha." 
                 
-                // Este script executa os testes DENTRO do servidor de teste.
-                // Isso é mais robusto do que rodar no Jenkins.
-                sh """
-                    ssh -i ${env.CAMINHO_CHAVE_SSH} -o StrictHostKeyChecking=no ${env.USUARIO_SSH}@${env.HOST_TESTING} "
-                        
-                        # 1. Instala o NVM (gerenciador do Node.js)
-                        echo 'Instalando Node.js e dependências...'
-                        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
-                        
-                        # 2. Ativa o NVM e instala o Node.js 18
-                        export NVM_DIR="$HOME/.nvm"
-                        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-                        nvm install 18
-                        
-                        # 3. Entra na pasta de testes e instala as dependências (selenium-webdriver, etc)
-                        cd /var/www/html/public/selenium-tests
-                        npm install
-                        
-                        # 4. Finalmente, RODA O TESTE!
-                        echo 'Executando script de teste...'
-                        node test_form.js
-                    "
-                """
-                
-                echo "Testes concluídos com sucesso!"
+                // Pausa o pipeline e espera por uma confirmação humana.
+                timeout(time: 1, unit: 'HOURS') {
+                    input message: 'O Jogo da Velha está funcionando em Teste? Aprovar deploy para Produção?'
+                }
             }
         }
-        
         
         stage('Deploy em Ambiente de Produção') {
             // Este 'parallel' executa os deploys nos dois servidores
@@ -111,7 +90,7 @@ pipeline {
             }
         }
 
-    }
+    } // Fim dos stages
 
     post {
         always {
