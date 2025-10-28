@@ -22,7 +22,7 @@ pipeline {
         HOST_PROD_2    = '3.84.53.23'
         REPO_URL         = 'https://github.com/kinhoreis2000/Final_DEVOPS'
         USUARIO_SSH      = 'ec2-user'
-        CAMINHO_CHAVE_SSH = '/home/ec2-user/.ssh/DevOps.pem'
+        CAMINHO_CHAVE_SSH = '/home/ec2-user/.ssh/deployer-key.pem'
         // ---> NOVO: Caminho para os testes DENTRO do servidor de teste <---
         TEST_DIR_REMOTO = '/var/www/html/scripts/selenium-tests' 
     }
