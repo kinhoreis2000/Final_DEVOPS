@@ -21,11 +21,23 @@ resource "aws_route_table_association" "main_b" {
   route_table_id = aws_route_table.main.id
 }
 
+# --- BLOCO MODIFICADO (Versão Insegura) ---
 resource "aws_security_group" "web_sg" {
   name        = "web-sg"
-  description = "Allow web traffic"
+  description = "Allow web and internal traffic"
   vpc_id      = aws_vpc.main.id
 
+  # REGRA ADICIONADA: Permite comunicação interna
+  # Isso permite que o Controller e os Agentes (no mesmo SG) 
+  # se comuniquem em qualquer porta (Ex: JNLP 50000 ou SSH interno).
+  ingress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    self      = true
+  }
+
+  # Regra HTTP (Porta 80)
   ingress {
     from_port   = 80
     to_port     = 80
@@ -33,20 +45,23 @@ resource "aws_security_group" "web_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # Regra SSH (Porta 22) - ABERTA PARA O MUNDO
   ingress {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"] # <-- ALTERADO AQUI (PERIGOSO)
   }
 
+  # Regra Jenkins UI (Porta 8080) - ABERTA PARA O MUNDO
   ingress {
     from_port   = 8080
     to_port     = 8080
     protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+    cidr_blocks = ["0.0.0.0/0"] # <-- ALTERADO AQUI (PERIGOSO)
   }
 
+  # Regra de Saída (Permite tudo)
   egress {
     from_port   = 0
     to_port     = 0
@@ -54,6 +69,7 @@ resource "aws_security_group" "web_sg" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 }
+# --- FIM DO BLOCO MODIFICADO ---
 
 resource "aws_subnet" "main_a" {
   vpc_id                  = aws_vpc.main.id

@@ -332,7 +332,7 @@ function cellClicked(id) {
         return false;
     }
     moves += 1;
-    document.getElementById(id).innerHTML = "playerText";
+    document.getElementById(id).innerHTML = playerText;
     // randomize orientation (for looks only)
     var rand = Math.random();
     if (rand < 0.3) {
